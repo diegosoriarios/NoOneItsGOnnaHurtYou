@@ -1,5 +1,7 @@
+require("source/audio")
+
 function love.load()
-  love.window.setFullscreen(true, "desktop")
+  --love.window.setFullscreen(true, "desktop")
   screen_width = love.graphics.getWidth()
   screen_height = love.graphics.getHeight()
 
@@ -15,8 +17,16 @@ function love.load()
     distance = 100,
   }
 
-  time = 0
-	timeLimit = 2
+  spawnTime = 0
+	spawnTimeLimit = 2
+
+  soundTime = 0
+  bpm = 60
+
+  kick = love.audio.newSource("sounds/kick.mp3", "static")
+  hi_hat = love.audio.newSource("sounds/hi-hat.mp3", "static")
+  currentSound = kick
+  loop = 0
 end
 
 function love.update(dt)
@@ -34,6 +44,7 @@ function love.update(dt)
 
   handleEnemyMove(dt)
   spawn(dt)
+  --handleSound(dt)
 end
 
 function love.draw()
@@ -58,18 +69,18 @@ function love.draw()
   -- Temporary
   love.graphics.setColor(1, 1, 1)
   love.graphics.print('shipAngle: '..shipAngle)
-  love.graphics.print('timer: '..time, 0, 50)
+  love.graphics.print('spawnTimer: '..spawnTime, 0, 50)
 end
 
 function spawn(dt)
-  time = time + dt
-	if time >= timeLimit then
+  spawnTime = spawnTime + dt
+	if spawnTime >= spawnTimeLimit then
 		table.insert(enemies, {
-      x = 100,
-      y = 100,
+      x = love.math.random(screen_width),
+      y = love.math.random(screen_height),
       speed = 100
     })
-		time = 0 --optional if you want it to happen repeatedly
+		spawnTime = 0 --optional if you want it to happen repeatedly
 	end
 end
 

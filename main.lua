@@ -15,6 +15,9 @@ function love.load()
     y = screen_height / 2 + math.sin(0) * 100,
     r = 15,
     distance = 100,
+    xp = 0,
+    level = 1,
+    xpToNext = 5,
   }
 
   spawnTime = 0
@@ -29,7 +32,67 @@ function love.load()
   loop = 0
 end
 
+local availableUpgrades = {
+  {
+      name = "Tempo Up",
+      description = "Increase movement speed",
+      apply = function() speed = speed + 1 end
+  },
+  {
+      name = "BPM Up",
+      description = "Increase attack speed",
+      apply = function() bpm = bpm + 10 end
+  },
+  {
+      name = "Range Up",
+      description = "Increase attack range",
+      apply = function() player.distance = player.distance + 20 end
+  },
+  {
+      name = "Size Up",
+      description = "Increase player size",
+      apply = function() player.r = player.r + 5 end
+  },
+  {
+      name = "Enemy Slowdown",
+      description = "Decrease enemy speed",
+      apply = function() 
+          for _, enemy in ipairs(enemies) do
+              enemy.speed = enemy.speed * 0.9
+          end
+      end
+  },
+  {
+      name = "XP Boost",
+      description = "Gain more XP from enemies",
+      apply = function() player.xpMultiplier = (player.xpMultiplier or 1) + 0.2 end
+  }
+}
+
+local currentUpgradeChoices = {}
+local selectedUpgrade = 1
+
+function getRandomUpgrades(count)
+  local choices = {}
+  local indices = {}
+  
+  for i = 1, #availableUpgrades do
+      table.insert(indices, i)
+  end
+  
+  for i = 1, count do
+      if #indices == 0 then break end
+      local randomIndex = love.math.random(#indices)
+      table.insert(choices, availableUpgrades[indices[randomIndex]])
+      table.remove(indices, randomIndex)
+  end
+  
+  return choices
+end
+
 function love.update(dt)
+  if showUpgradeMenu then return end
+
   if love.keyboard.isDown('right') then
     shipAngle = shipAngle + speed * dt
     player.x = screen_width / 2 + math.cos(shipAngle) * player.distance
@@ -47,6 +110,26 @@ function love.update(dt)
   --handleSound(dt)
 end
 
+function love.keypressed(key)
+  if showUpgradeMenu then
+      if key == "up" then
+          selectedUpgrade = selectedUpgrade - 1
+          if selectedUpgrade < 1 then 
+              selectedUpgrade = #currentUpgradeChoices 
+          end
+      elseif key == "down" then
+          selectedUpgrade = selectedUpgrade + 1
+          if selectedUpgrade > #currentUpgradeChoices then 
+              selectedUpgrade = 1 
+          end
+      elseif key == "return" or key == "space" then
+          -- Apply the selected upgrade
+          currentUpgradeChoices[selectedUpgrade].apply()
+          showUpgradeMenu = false
+      end
+  end
+end
+
 function love.draw()
   local shipCircleDistance = 100
 
@@ -58,7 +141,7 @@ function love.draw()
       'fill',
       screen_width / 2 + math.cos(shipAngle) * shipCircleDistance,
       screen_height / 2 + math.sin(shipAngle) * shipCircleDistance,
-      15
+      player.r
   )
 
   for enemyIndex, enemy in ipairs(enemies) do
@@ -70,6 +153,12 @@ function love.draw()
   love.graphics.setColor(1, 1, 1)
   love.graphics.print('shipAngle: '..shipAngle)
   love.graphics.print('spawnTimer: '..spawnTime, 0, 50)
+  love.graphics.print('fps: '..love.timer.getFPS(), 0, 100)
+
+  love.graphics.print('XP: '..player.xp..' / '..player.xpToNext, 0, 150)
+  love.graphics.print('Level: '..player.level, 0, 170)
+
+  drawUpgradeMenu()
 end
 
 function spawn(dt)
@@ -112,14 +201,55 @@ function handleEnemyMove(dt)
     enemy.y = enemy.y + (dy / distance * enemy.speed * dt)
 
     if checkCircularCollision(player, enemy) then
-      enemy.x = 200
-      enemy.y = 200
+      player.xp = player.xp + 1
+      table.remove(enemies, enemyIndex)
+      checkLevelUp()
     end
+  end
+end
+
+function drawUpgradeMenu()
+  if not showUpgradeMenu then return end
+  
+  love.graphics.setColor(0, 0, 0, 0.8)
+  love.graphics.rectangle('fill', 0, 0, screen_width, screen_height)
+  
+  love.graphics.setColor(1, 1, 1)
+  love.graphics.print("LEVEL UP!", screen_width/2 - 50, screen_height/3, 0, 2, 2)
+  
+  for i, upgrade in ipairs(currentUpgradeChoices) do
+      local x = screen_width/2 - 100
+      local y = screen_height/2 + (i-1) * 60
+      
+      if i == selectedUpgrade then
+          love.graphics.setColor(1, 1, 0, 0.3)
+          love.graphics.rectangle('fill', x - 10, y - 5, 220, 50)
+      end
+      
+      love.graphics.setColor(1, 1, 1)
+      love.graphics.print(upgrade.name, x, y)
+      love.graphics.setColor(0.7, 0.7, 0.7)
+      love.graphics.print(upgrade.description, x, y + 20, 0, 0.8, 0.8)
+  end
+  
+  love.graphics.setColor(0.7, 0.7, 0.7)
+  love.graphics.print("Use UP/DOWN to select and ENTER to confirm", 
+      screen_width/2 - 150, screen_height * 0.8)
+end
+
+function checkLevelUp()
+  if player.xp >= player.xpToNext then
+      player.level = player.level + 1
+      player.xp = player.xp - player.xpToNext
+      player.xpToNext = math.floor(player.xpToNext * 1.5)
+      
+      currentUpgradeChoices = getRandomUpgrades(3)
+      selectedUpgrade = 1
+      showUpgradeMenu = true
   end
 end
 
 function checkCircularCollision(player, enemy)
 	local dx, dy, sr = enemy.x - player.x, enemy.y - player.y, 0 + player.r
 	return dx*dx + dy*dy < sr*sr
-end    spawnTime = 0
-  end
+end

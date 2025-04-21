@@ -74,14 +74,33 @@ end
 
 function spawn(dt)
   spawnTime = spawnTime + dt
-	if spawnTime >= spawnTimeLimit then
-		table.insert(enemies, {
-      x = love.math.random(screen_width),
-      y = love.math.random(screen_height),
+  if spawnTime >= spawnTimeLimit then
+    local perimeter = 2 * (screen_width + screen_height)
+
+    local point = love.math.random(perimeter)
+    local x, y
+    
+    if point < screen_width then
+      x = point
+      y = -20
+    elseif point < (screen_width + screen_height) then
+      x = screen_width + 20
+      y = point - screen_width
+    elseif point < (2 * screen_width + screen_height) then
+      x = point - (screen_width + screen_height)
+      y = screen_height + 20
+    else
+      x = -20
+      y = point - (2 * screen_width + screen_height)
+    end
+    
+    table.insert(enemies, {
+      x = x,
+      y = y,
       speed = 100
     })
-		spawnTime = 0 --optional if you want it to happen repeatedly
-	end
+    spawnTime = 0
+  end
 end
 
 function handleEnemyMove(dt)
@@ -102,4 +121,5 @@ end
 function checkCircularCollision(player, enemy)
 	local dx, dy, sr = enemy.x - player.x, enemy.y - player.y, 0 + player.r
 	return dx*dx + dy*dy < sr*sr
-end
+end    spawnTime = 0
+  end

@@ -1,4 +1,6 @@
-require("source/audio")
+require("source.audio")
+require("source.attacks")
+require("source.upgrades")
 
 function love.load()
   --love.window.setFullscreen(true, "desktop")
@@ -9,6 +11,13 @@ function love.load()
   speed = 5
 
   enemies = {}
+  attacks = generateAttacks()
+  availableUpgrades = generateUpgrades()
+
+  shakeAmount = 0
+
+  currentUpgradeChoices = {}
+  selectedUpgrade = 1
 
   player = {
     x = screen_width / 2 + math.cos(0) * 100,
@@ -18,76 +27,35 @@ function love.load()
     xp = 0,
     level = 1,
     xpToNext = 5,
+    bpm = 60,
+  }
+  player.cooldown = 60 / player.bpm
+  player.attacks = {
+    attacks[0]
   }
 
   spawnTime = 0
 	spawnTimeLimit = 2
 
   soundTime = 0
-  bpm = 60
 
   kick = love.audio.newSource("sounds/kick.mp3", "static")
   hi_hat = love.audio.newSource("sounds/hi-hat.mp3", "static")
   currentSound = kick
   loop = 0
-end
-
-local availableUpgrades = {
-  {
-      name = "Tempo Up",
-      description = "Increase movement speed",
-      apply = function() speed = speed + 1 end
-  },
-  {
-      name = "BPM Up",
-      description = "Increase attack speed",
-      apply = function() bpm = bpm + 10 end
-  },
-  {
-      name = "Range Up",
-      description = "Increase attack range",
-      apply = function() player.distance = player.distance + 20 end
-  },
-  {
-      name = "Size Up",
-      description = "Increase player size",
-      apply = function() player.r = player.r + 5 end
-  },
-  {
-      name = "Enemy Slowdown",
-      description = "Decrease enemy speed",
-      apply = function() 
-          for _, enemy in ipairs(enemies) do
-              enemy.speed = enemy.speed * 0.9
-          end
-      end
-  },
-  {
-      name = "XP Boost",
-      description = "Gain more XP from enemies",
-      apply = function() player.xpMultiplier = (player.xpMultiplier or 1) + 0.2 end
-  }
-}
-
-local currentUpgradeChoices = {}
-local selectedUpgrade = 1
-
-function getRandomUpgrades(count)
-  local choices = {}
-  local indices = {}
   
-  for i = 1, #availableUpgrades do
-      table.insert(indices, i)
-  end
+  attackTimer = 0
+  attackDuration = 0.5
+  isAttacking = false
+  attackRadius = 50
   
-  for i = 1, count do
-      if #indices == 0 then break end
-      local randomIndex = love.math.random(#indices)
-      table.insert(choices, availableUpgrades[indices[randomIndex]])
-      table.remove(indices, randomIndex)
-  end
-  
-  return choices
+  attackInterval = 60 / player.bpm
+
+  particleImage = love.graphics.newImage("graphics/particle.png")
+  particles = love.graphics.newParticleSystem(particleImage, 100)
+  particles:setParticleLifetime(0.2, 0.4)
+  particles:setLinearAcceleration(-50, -50, 50, 50)
+  particles:setColors(1, 1, 1, 1, 1, 1, 1, 0)
 end
 
 function love.update(dt)
@@ -107,6 +75,7 @@ function love.update(dt)
 
   handleEnemyMove(dt)
   spawn(dt)
+  handleAttack(dt)
   --handleSound(dt)
 end
 
@@ -123,7 +92,6 @@ function love.keypressed(key)
               selectedUpgrade = 1 
           end
       elseif key == "return" or key == "space" then
-          -- Apply the selected upgrade
           currentUpgradeChoices[selectedUpgrade].apply()
           showUpgradeMenu = false
       end
@@ -149,6 +117,10 @@ function love.draw()
     love.graphics.circle('fill', enemy.x, enemy.y, 5)
   end
 
+  for _, attack in ipairs(player.attacks) do
+        attack:draw(player)
+    end
+
   -- Temporary
   love.graphics.setColor(1, 1, 1)
   love.graphics.print('shipAngle: '..shipAngle)
@@ -159,6 +131,12 @@ function love.draw()
   love.graphics.print('Level: '..player.level, 0, 170)
 
   drawUpgradeMenu()
+end
+
+function handleAttack(dt)
+  for _, attack in ipairs(player.attacks) do
+        attack:update(dt, player, enemies)
+    end
 end
 
 function spawn(dt)
@@ -203,6 +181,13 @@ function handleEnemyMove(dt)
     if checkCircularCollision(player, enemy) then
       player.xp = player.xp + 1
       table.remove(enemies, enemyIndex)
+
+      if distance <= attackRadius then
+        particles:setPosition(enemy.x, enemy.y)
+        particles:emit(10)
+        table.remove(enemies, i)
+      end
+
       checkLevelUp()
     end
   end

@@ -8,19 +8,14 @@ function generateAttacks()
       isActive = false,
 
       update = function(self, dt, player, enemies, bpm)
-        -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new attack when cooldown is reached
         if self.timer >= player.cooldown then
           self.timer = self.timer - player.cooldown
           self.isActive = true
           -- Play sound effect here if needed
         end
-
-        -- Handle active attack
         if self.isActive then
-          -- Check for enemies in range
           for i = #enemies, 1, -1 do
             local enemy = enemies[i]
             local dx = enemy.x - player.x
@@ -28,17 +23,13 @@ function generateAttacks()
             local distance = math.sqrt(dx * dx + dy * dy)
 
             if distance <= self.radius then
-              -- Particle effect
               particles:setPosition(enemy.x, enemy.y)
               particles:emit(10)
-              -- Remove enemy and grant XP
               table.remove(enemies, i)
               player.xp = player.xp + (1 * (player.xpMultiplier or 1))
               checkLevelUp()
             end
           end
-
-          -- End attack after duration
           if self.timer >= self.duration then
             self.isActive = false
           end
@@ -47,24 +38,22 @@ function generateAttacks()
 
       draw = function(self, player)
         if self.isActive then
-          -- Draw attack circle
           love.graphics.setColor(1, 1, 1, 0.5)
           love.graphics.circle('fill', player.x, player.y, self.radius)
-          -- Draw border
           love.graphics.setColor(1, 1, 1, 0.8)
           love.graphics.circle('line', player.x, player.y, self.radius)
         end
 
-        -- Draw cooldown bar
+        -- Draw cooldown bar - maybe remove
         love.graphics.setColor(1, 1, 1)
         local barWidth = 100
         local barHeight = 10
         local barX = 10
         local barY = love.graphics.getHeight() - 20
-        -- Background
+        
         love.graphics.setColor(0.2, 0.2, 0.2)
         love.graphics.rectangle('fill', barX, barY, barWidth, barHeight)
-        -- Progress
+
         love.graphics.setColor(0, 1, 1)
         local progress = (player.cooldown - self.timer) / player.cooldown
         love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
@@ -85,24 +74,19 @@ function generateAttacks()
       timer = 0,
 
       update = function(self, dt, player, enemies)
-        -- Update existing bullets
         for i = #self.bullets, 1, -1 do
           local bullet = self.bullets[i]
           bullet.x = bullet.x + bullet.dx * self.bulletSpeed * dt
           bullet.y = bullet.y + bullet.dy * self.bulletSpeed * dt
-
-          -- Remove bullets that are off-screen
           if bullet.x < 0 or bullet.x > screen_width or
               bullet.y < 0 or bullet.y > screen_height then
             table.remove(self.bullets, i)
           end
-
-          -- Check bullet collisions with enemies
           for j = #enemies, 1, -1 do
             local enemy = enemies[j]
             local dx = enemy.x - bullet.x
             local dy = enemy.y - bullet.y
-            if dx * dx + dy * dy < 100 then     -- collision radius
+            if dx * dx + dy * dy < 100 then
               table.remove(enemies, j)
               table.remove(self.bullets, i)
               player.xp = player.xp + (1 * (player.xpMultiplier or 1))
@@ -112,11 +96,9 @@ function generateAttacks()
           end
         end
 
-        -- Spawn new bullets
         self.timer = self.timer + dt
         if self.timer >= player.cooldown then
           self.timer = self.timer - player.cooldown
-          -- Spawn bullets in a circle
           for i = 1, self.bulletCount do
             local angle = (i - 1) * (2 * math.pi / self.bulletCount)
             table.insert(self.bullets, {
@@ -130,7 +112,6 @@ function generateAttacks()
       end,
 
       draw = function(self, player)
-        -- Draw bullets
         love.graphics.setColor(1, 0.5, 0)
         for _, bullet in ipairs(self.bullets) do
           love.graphics.circle('fill', bullet.x, bullet.y, self.radius)

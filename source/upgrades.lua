@@ -25,6 +25,15 @@ function generateUpgrades()
         apply = function() player.r = player.r + 5 end
     },
     {
+      name = "Quantity Up",
+      description = "Increase attack quantity",
+      apply = function ()
+        for _, k in pairs(player.attacks) do
+            k.count  = k.count + 1
+        end
+      end
+    },
+    {
         name = "Enemy Slowdown",
         description = "Decrease enemy speed",
         apply = function() 

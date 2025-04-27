@@ -32,10 +32,11 @@ function game:init()
     level = 1,
     xpToNext = 5,
     bpm = 60,
+    hp = 1,
   }
   player.cooldown = 60 / player.bpm
   player.attacks = {
-    attacks[0]
+    attacks[3]
   }
 
   spawnTime = 0
@@ -193,6 +194,13 @@ function handleEnemyMove(dt)
       end
 
       checkLevelUp()
+    end
+
+    if checkCircularCollision({x=0, y=0, r=0}, enemy) then
+      player.hp = player.hp - 1
+      if player.hp == 0 then
+        states.switch('gameover')
+      end
     end
   end
 end

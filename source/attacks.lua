@@ -138,8 +138,8 @@ function generateAttacks()
         self.timer = self.timer + dt
 
         -- Start new attack when cooldown is reached
-        if self.timer >= self.cooldown then
-          self.timer = self.timer - self.cooldown
+        if self.timer >= player.cooldown then
+          self.timer = self.timer - player.cooldown
 
           -- Create multiple new circles at random positions
           for i = 1, self.count do
@@ -200,13 +200,13 @@ function generateAttacks()
         local barWidth = 100
         local barHeight = 10
         local barX = 10
-        local barY = love.graphics.getHeight() - 40   -- Position above other bar
+        local barY = love.graphics.getHeight() - 40 -- Position above other bar
         -- Background
         love.graphics.setColor(0.2, 0.2, 0.2)
         love.graphics.rectangle('fill', barX, barY, barWidth, barHeight)
         -- Progress
         love.graphics.setColor(1, 0.5, 0)
-        local progress = (self.cooldown - self.timer) / self.cooldown
+        local progress = (player.cooldown - self.timer) / player.cooldown
         love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
 
         -- Draw count indicator
@@ -215,19 +215,19 @@ function generateAttacks()
       end,
 
       updateBPM = function(self, newBPM)
-        self.cooldown = 60 / newBPM
+        player.cooldown = 60 / newBPM
       end
     },
     [3] = {
       name = "Boomerang Attack",
-      radius = 15,             -- Size of the boomerang
-      speed = 400,             -- Speed of the boomerang
-      maxDistance = 300,       -- Maximum distance before returning
-      cooldown = 60 / 60,      -- 60/bpm
+      radius = 15,               -- Size of the boomerang
+      speed = 400,               -- Speed of the boomerang
+      maxDistance = 300,         -- Maximum distance before returning
+      cooldown = 60 / 60,        -- 60/bpm
       timer = 0,
-      boomerangs = {},         -- List of active boomerangs
-      count = 2,               -- Number of boomerangs to spawn
-      damage = 1,              -- Damage multiplier
+      boomerangs = {},           -- List of active boomerangs
+      count = 2,                 -- Number of boomerangs to spawn
+      damage = 1,                -- Damage multiplier
       spreadAngle = math.pi / 4, -- Angle between multiple boomerangs
 
       update = function(self, dt, player, enemies)
@@ -237,8 +237,8 @@ function generateAttacks()
         end
 
         -- Start new attack when cooldown is reached and no boomerangs are active
-        if self.timer >= self.cooldown and #self.boomerangs < self.count then
-          self.timer = self.timer - self.cooldown
+        if self.timer >= player.cooldown and #self.boomerangs < self.count then
+          self.timer = self.timer - player.cooldown
 
           -- Calculate base angle from player's rotation
           local baseAngle = shipAngle
@@ -259,7 +259,7 @@ function generateAttacks()
               distance = 0,
               goingOut = true,
               rotation = 0,
-              hitEnemies = {}       -- Track hit enemies to prevent multiple hits
+              hitEnemies = {} -- Track hit enemies to prevent multiple hits
             })
           end
         end
@@ -382,7 +382,7 @@ function generateAttacks()
         -- Progress
         if #self.boomerangs == 0 then
           love.graphics.setColor(1, 0.7, 0.2)
-          local progress = (self.cooldown - self.timer) / self.cooldown
+          local progress = (player.cooldown - self.timer) / player.cooldown
           love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
         else
           -- Show different color when boomerangs are active
@@ -399,6 +399,174 @@ function generateAttacks()
         player.cooldown = 60 / newBPM
         player.bpm = newBPM
       end
+    },
+    [4] = {
+      name = "Fire Tower Attack",
+      width = 40,       -- Width of each fire tower
+      height = 150,     -- Height of the fire tower
+      duration = 0.5,   -- 500 milliseconds
+      timer = 0,
+      towers = {},      -- Active fire towers
+      damage = 1,       -- Damage multiplier
+      offset = 100,     -- Distance from player
+      count = 0,
+
+      update = function(self, dt, player, enemies)
+        -- Update attack timer
+        self.timer = self.timer + dt
+
+        -- Start new attack when cooldown is reached
+        if self.timer >= player.cooldown then
+          self.timer = self.timer - player.cooldown
+
+          -- Create left and right fire towers
+          table.insert(self.towers, {
+            x = player.x - self.offset,     -- Left tower
+            y = player.y + 50,
+            lifetime = 0,
+            particles = self:createFireParticles(),
+            side = "left"
+          })
+
+          table.insert(self.towers, {
+            x = player.x + self.offset,     -- Right tower
+            y = player.y + 50,
+            lifetime = 0,
+            particles = self:createFireParticles(),
+            side = "right"
+          })
+        end
+
+        -- Update existing towers
+        for i = #self.towers, 1, -1 do
+          local tower = self.towers[i]
+          tower.lifetime = tower.lifetime + dt
+
+          -- Update particle system
+          tower.particles:update(dt)
+
+          -- Update position based on player movement
+          --if tower.side == "left" then
+          --  tower.x = player.x - self.offset
+          --else
+          --  tower.x = player.x + self.offset
+          --end
+          --tower.y = player.y
+
+          -- Check for enemy collisions
+          for j = #enemies, 1, -1 do
+            local enemy = enemies[j]
+
+            -- Check if enemy is within the tower's area
+            local inXRange = math.abs(enemy.x - tower.x) <= self.width / 2
+            local inYRange = enemy.y <= tower.y and
+                enemy.y >= tower.y - (self.height * (tower.lifetime / self.duration))
+
+            if inXRange and inYRange then
+              -- Create hit effect
+              particles:setPosition(enemy.x, enemy.y)
+              particles:emit(10)
+
+              -- Remove enemy
+              table.remove(enemies, j)
+
+              -- Add XP
+              player.xp = player.xp + (self.damage * (player.xpMultiplier or 1))
+              checkLevelUp()
+            end
+          end
+
+          -- Remove tower if duration expired
+          if tower.lifetime >= self.duration then
+            table.remove(self.towers, i)
+          end
+        end
+      end,
+
+      createFireParticles = function(self)
+        local particles = love.graphics.newParticleSystem(particleImage, 200)
+        particles:setParticleLifetime(0.1, 0.3)
+        particles:setEmissionRate(150)
+        particles:setSizeVariation(0.5)
+        particles:setLinearAcceleration(-20, -200, 20, -400)
+        particles:setColors(
+          1, 0.5, 0.1, 1,    -- Orange
+          1, 0.3, 0.1, 1,    -- Dark orange
+          1, 0.1, 0.1, 0.5   -- Dark red
+        )
+        return particles
+      end,
+
+      draw = function(self, player)
+        -- Draw active towers
+        for _, tower in ipairs(self.towers) do
+          -- Calculate tower height based on lifetime
+          local currentHeight = self.height * (tower.lifetime / self.duration)
+
+          -- Draw fire particles
+          love.graphics.draw(tower.particles, tower.x, tower.y)
+
+          -- Draw tower base shape
+          love.graphics.setColor(1, 0.3, 0.1, 0.3)
+          love.graphics.rectangle('fill',
+            tower.x - self.width / 2,
+            tower.y - currentHeight,
+            self.width,
+            currentHeight
+          )
+
+          -- Draw tower outline
+          love.graphics.setColor(1, 0.5, 0.1, 0.5)
+          love.graphics.rectangle('line',
+            tower.x - self.width / 2,
+            tower.y - currentHeight,
+            self.width,
+            currentHeight
+          )
+
+          -- Update particle position
+          tower.particles:setPosition(tower.x, tower.y - currentHeight / 2)
+          self:drawHeatDistortion(tower.x, tower.y, self.width, currentHeight)
+        end
+
+        -- Draw cooldown bar
+        love.graphics.setColor(1, 1, 1)
+        local barWidth = 100
+        local barHeight = 10
+        local barX = 10
+        local barY = love.graphics.getHeight() - 80
+
+        -- Background
+        love.graphics.setColor(0.2, 0.2, 0.2)
+        love.graphics.rectangle('fill', barX, barY, barWidth, barHeight)
+
+        -- Progress
+        love.graphics.setColor(1, 0.3, 0.1)
+        local progress = (player.cooldown - self.timer) / player.cooldown
+        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+      end,
+
+      updateBPM = function(self, newBPM)
+        player.cooldown = 60 / newBPM
+        player.bpm = newBPM
+      end,
+
+      drawHeatDistortion = function(self, x, y, width, height)
+        local shader = love.graphics.newShader[[
+            extern number time;
+            vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 pixel_coords)
+            {
+                vec2 coords = texture_coords;
+                coords.x += sin(coords.y * 10 + time) * 0.01;
+                return Texel(texture, coords) * color;
+            }
+        ]]
+        
+        shader:send("time", love.timer.getTime())
+        love.graphics.setShader(shader)
+        -- Draw your tower here
+        love.graphics.setShader()
+    end
     }
   }
   return attacks

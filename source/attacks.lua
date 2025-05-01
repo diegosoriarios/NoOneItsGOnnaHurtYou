@@ -402,13 +402,13 @@ function generateAttacks()
     },
     [4] = {
       name = "Fire Tower Attack",
-      width = 40,       -- Width of each fire tower
-      height = 150,     -- Height of the fire tower
-      duration = 0.5,   -- 500 milliseconds
+      width = 40,     -- Width of each fire tower
+      height = 150,   -- Height of the fire tower
+      duration = 0.5, -- 500 milliseconds
       timer = 0,
-      towers = {},      -- Active fire towers
-      damage = 1,       -- Damage multiplier
-      offset = 100,     -- Distance from player
+      towers = {},    -- Active fire towers
+      damage = 1,     -- Damage multiplier
+      offset = 100,   -- Distance from player
       count = 0,
 
       update = function(self, dt, player, enemies)
@@ -421,7 +421,7 @@ function generateAttacks()
 
           -- Create left and right fire towers
           table.insert(self.towers, {
-            x = player.x - self.offset,     -- Left tower
+            x = player.x - self.offset, -- Left tower
             y = player.y + 50,
             lifetime = 0,
             particles = self:createFireParticles(),
@@ -429,7 +429,7 @@ function generateAttacks()
           })
 
           table.insert(self.towers, {
-            x = player.x + self.offset,     -- Right tower
+            x = player.x + self.offset, -- Right tower
             y = player.y + 50,
             lifetime = 0,
             particles = self:createFireParticles(),
@@ -490,9 +490,9 @@ function generateAttacks()
         particles:setSizeVariation(0.5)
         particles:setLinearAcceleration(-20, -200, 20, -400)
         particles:setColors(
-          1, 0.5, 0.1, 1,    -- Orange
-          1, 0.3, 0.1, 1,    -- Dark orange
-          1, 0.1, 0.1, 0.5   -- Dark red
+          1, 0.5, 0.1, 1,  -- Orange
+          1, 0.3, 0.1, 1,  -- Dark orange
+          1, 0.1, 0.1, 0.5 -- Dark red
         )
         return particles
       end,
@@ -552,7 +552,7 @@ function generateAttacks()
       end,
 
       drawHeatDistortion = function(self, x, y, width, height)
-        local shader = love.graphics.newShader[[
+        local shader = love.graphics.newShader [[
             extern number time;
             vec4 effect(vec4 color, Image texture, vec2 texture_coords, vec2 pixel_coords)
             {
@@ -561,12 +561,272 @@ function generateAttacks()
                 return Texel(texture, coords) * color;
             }
         ]]
-        
+
         shader:send("time", love.timer.getTime())
         love.graphics.setShader(shader)
         -- Draw your tower here
         love.graphics.setShader()
-    end
+      end
+    },
+    [5] = {
+      name = "Bouncing Knife Attack",
+      size = 20,        -- Size of the knife
+      speed = 500,      -- Speed of the knife
+      cooldown = 60 / 60, -- 60/bpm
+      timer = 0,
+      knives = {},      -- Active knives
+      maxBounces = 3,   -- Default number of bounces before destroying
+      damage = 1,       -- Damage multiplier
+      penetration = 1,  -- Number of enemies it can hit before destroying
+      knifeTypes = {
+        normal = {
+          color = { 0.8, 0.8, 0.8 },
+          trailColor = { 1, 1, 1 }
+        },
+        fire = {
+          color = { 1, 0.5, 0 },
+          trailColor = { 1, 0.3, 0 }
+        },
+        ice = {
+          color = { 0.5, 0.8, 1 },
+          trailColor = { 0.7, 0.9, 1 }
+        }
+      },
+
+      update = function(self, dt, player, enemies)
+        -- Update attack timer
+        self.timer = self.timer + dt
+
+        -- Start new attack when cooldown is reached
+        if self.timer >= self.cooldown then
+          self.timer = self.timer - self.cooldown
+
+          -- Create new knife
+          table.insert(self.knives, {
+            x = player.x,
+            y = player.y,
+            angle = shipAngle,     -- Use player's angle
+            rotation = shipAngle,
+            bounces = 0,
+            hitEnemies = {},     -- Track hit enemies
+            enemiesHit = 0,      -- Count of enemies hit
+            trail = {}           -- Trail effect positions
+          })
+
+          -- Play throw sound
+          -- if knifeThrowSound then knifeThrowSound:play() end
+        end
+
+        -- Update existing knives
+        for i = #self.knives, 1, -1 do
+          local knife = self.knives[i]
+
+          -- Update position
+          local dx = math.cos(knife.angle) * self.speed * dt
+          local dy = math.sin(knife.angle) * self.speed * dt
+          knife.x = knife.x + dx
+          knife.y = knife.y + dy
+
+          -- Add trail effect
+          table.insert(knife.trail, {
+            x = knife.x,
+            y = knife.y,
+            age = 0
+          })
+
+          -- Limit trail length
+          if #knife.trail > 10 then
+            table.remove(knife.trail, 1)
+          end
+
+          -- Age trail points
+          for _, point in ipairs(knife.trail) do
+            point.age = point.age + dt
+          end
+
+          -- Check screen bounds and bounce
+          local bounced = false
+          if knife.x < 0 then
+            knife.x = 0
+            knife.angle = math.pi - knife.angle
+            bounced = true
+          elseif knife.x > love.graphics.getWidth() then
+            knife.x = love.graphics.getWidth()
+            knife.angle = math.pi - knife.angle
+            bounced = true
+          end
+
+          if knife.y < 0 then
+            knife.y = 0
+            knife.angle = -knife.angle
+            bounced = true
+          elseif knife.y > love.graphics.getHeight() then
+            knife.y = love.graphics.getHeight()
+            knife.angle = -knife.angle
+            bounced = true
+          end
+
+          if bounced then
+            self:createHitSpark(knife.x, knife.y)
+            knife.bounces = knife.bounces + 1
+            knife.rotation = knife.angle
+            -- Play bounce sound
+            -- if knifeBounceSound then knifeBounceSound:play() end
+          end
+
+          -- Check for enemy collisions
+          for j = #enemies, 1, -1 do
+            local enemy = enemies[j]
+            local dx = enemy.x - knife.x
+            local dy = enemy.y - knife.y
+            local distance = math.sqrt(dx * dx + dy * dy)
+
+            if distance <= self.size + 5 and
+                not knife.hitEnemies[j] and
+                knife.enemiesHit < self.penetration then
+              -- Mark enemy as hit
+              knife.hitEnemies[j] = true
+              knife.enemiesHit = knife.enemiesHit + 1
+
+              if love.math.random() < 0.1 then       -- 10% crit chance
+                -- Critical hit
+                knife.enemiesHit = knife.enemiesHit + 1
+                self:createCriticalEffect(enemy.x, enemy.y)
+                player.xp = player.xp + (self.damage * 2 * (player.xpMultiplier or 1))
+              end
+
+              -- Create hit effect
+              particles:setPosition(enemy.x, enemy.y)
+              particles:emit(10)
+
+              -- Remove enemy
+              table.remove(enemies, j)
+
+              -- Add XP
+              player.xp = player.xp + (self.damage * (player.xpMultiplier or 1))
+              checkLevelUp()
+
+              -- Remove knife if penetration limit reached
+              if knife.enemiesHit >= self.penetration then
+                table.remove(self.knives, i)
+                break
+              end
+            end
+          end
+
+          -- Remove knife if max bounces reached
+          if knife.bounces >= self.maxBounces then
+            table.remove(self.knives, i)
+          end
+        end
+      end,
+
+      draw = function(self, player)
+        -- Draw active knives
+        for _, knife in ipairs(self.knives) do
+          -- Draw trail
+          for i, point in ipairs(knife.trail) do
+            local alpha = 1 - (point.age * 2)
+            if alpha > 0 then
+              love.graphics.setColor(1, 1, 1, alpha * 0.5)
+              love.graphics.circle('fill', point.x, point.y, 2)
+            end
+          end
+
+          -- Draw knife
+          love.graphics.push()
+          love.graphics.translate(knife.x, knife.y)
+          love.graphics.rotate(knife.rotation)
+
+          -- Knife body
+          love.graphics.setColor(0.8, 0.8, 0.8)
+          love.graphics.polygon('fill',
+            -self.size, -self.size / 4,
+            self.size, 0,
+            -self.size, self.size / 4
+          )
+
+          -- Knife handle
+          love.graphics.setColor(0.6, 0.4, 0.2)
+          love.graphics.rectangle('fill',
+            -self.size, -self.size / 4,
+            self.size / 2, self.size / 2
+          )
+
+          love.graphics.pop()
+          if #knife.trail > 1 then
+            love.graphics.setColor(1, 1, 1, 0.3)
+            for i = 1, #knife.trail - 1 do
+              love.graphics.line(
+                knife.trail[i].x, knife.trail[i].y,
+                knife.trail[i + 1].x, knife.trail[i + 1].y
+              )
+            end
+          end
+        end
+
+        -- Draw cooldown bar
+        love.graphics.setColor(1, 1, 1)
+        local barWidth = 100
+        local barHeight = 10
+        local barX = 10
+        local barY = love.graphics.getHeight() - 100
+
+        -- Background
+        love.graphics.setColor(0.2, 0.2, 0.2)
+        love.graphics.rectangle('fill', barX, barY, barWidth, barHeight)
+
+        -- Progress
+        love.graphics.setColor(0.8, 0.8, 0.8)
+        local progress = (self.cooldown - self.timer) / self.cooldown
+        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+
+        -- Draw stats
+        love.graphics.setColor(1, 1, 1)
+        love.graphics.print(string.format("Bounces: %d", self.maxBounces),
+          barX + barWidth + 10, barY)
+        love.graphics.print(string.format("Penetration: %d", self.penetration),
+          barX + barWidth + 10, barY + 15)
+      end,
+      createHitSpark = function(self, x, y)
+        local spark = {
+          x = x,
+          y = y,
+          lifetime = 0,
+          maxLifetime = 0.2,
+          particles = love.graphics.newParticleSystem(particleImage, 20)
+        }
+
+        spark.particles:setParticleLifetime(0.1, 0.2)
+        spark.particles:setEmissionRate(100)
+        spark.particles:setSizeVariation(0.5)
+        spark.particles:setLinearAcceleration(-200, -200, 200, 200)
+        spark.particles:setColors(1, 1, 0.5, 1, 1, 0.5, 0, 0)
+
+        return spark
+      end,
+      createCriticalEffect = function(x, y, angle)
+        local sparks = {}
+        local sparkCount = 5
+
+        for i = 1, sparkCount do
+          local sparkAngle = angle + love.math.random(-math.pi / 4, math.pi / 4)
+          table.insert(sparks, {
+            x = x,
+            y = y,
+            dx = math.cos(sparkAngle) * 200,
+            dy = math.sin(sparkAngle) * 200,
+            lifetime = 0,
+            maxLifetime = 0.2
+          })
+        end
+
+        return sparks
+      end,
+      updateBPM = function(self, newBPM)
+        player.cooldown = 60 / newBPM
+        player.bpm = newBPM
+      end,
     }
   }
   return attacks

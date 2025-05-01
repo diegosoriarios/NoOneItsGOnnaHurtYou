@@ -36,7 +36,7 @@ function game:init()
   }
   player.cooldown = 60 / player.bpm
   player.attacks = {
-    attacks[3]
+    attacks[0]
   }
 
   spawnTime = 0
@@ -169,7 +169,8 @@ function spawn(dt)
     table.insert(enemies, {
       x = x,
       y = y,
-      speed = 100
+      speed = 100,
+      radius = 5,
     })
     spawnTime = 0
   end

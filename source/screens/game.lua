@@ -38,6 +38,29 @@ function game:init()
   player.attacks = {
     attacks[0]
   }
+  player.spriteSheet = love.graphics.newImage("graphics/sprites/Character.png")
+  player.animation = {
+      frameWidth = 460,     -- Width of each frame
+      frameHeight = 460,    -- Height of each frame
+      framesPerRow = 6,    -- Number of frames per row in sprite sheet
+      totalFrames = 6,     -- Total number of frames
+      currentFrame = 1,    -- Current frame index
+      frameTime = 0.25,     -- Time per frame (seconds)
+      timer = 0,           -- Animation timer
+      isPlaying = true     -- Whether animation is playing
+  }
+  player.frames = {}
+  for i = 0, player.animation.totalFrames - 1 do
+      local x = (i % player.animation.framesPerRow) * player.animation.frameWidth
+      local y = math.floor(i / player.animation.framesPerRow) * player.animation.frameHeight
+      
+      player.frames[i + 1] = love.graphics.newQuad(
+          x, y,
+          player.animation.frameWidth,
+          player.animation.frameHeight,
+          player.spriteSheet:getDimensions()
+      )
+  end
 
   spawnTime = 0
 	spawnTimeLimit = 2
@@ -81,6 +104,7 @@ function game:update(dt)
   handleEnemyMove(dt)
   spawn(dt)
   handleAttack(dt)
+  updatePlayerAnimation(dt)
   --handleSound(dt)
 end
 
@@ -110,12 +134,18 @@ function game:draw()
   --love.graphics.circle('line', screen_width / 2, screen_height / 2, shipCircleDistance)
 
   love.graphics.setColor(0, 1, 1)
-  love.graphics.circle(
-      'fill',
-      screen_width / 2 + math.cos(shipAngle) * shipCircleDistance,
-      screen_height / 2 + math.sin(shipAngle) * shipCircleDistance,
-      player.r
-  )
+  
+
+  love.graphics.draw(
+        player.spriteSheet,
+        player.frames[player.animation.currentFrame],
+        player.x,
+        player.y,
+        player.angle,
+        .2, .2, -- scale
+        player.animation.frameWidth / 2,  -- origin x (center)
+        player.animation.frameHeight / 2  -- origin y (center)
+    )
 
   for enemyIndex, enemy in ipairs(enemies) do
     love.graphics.setColor(0, 1, 0)
@@ -250,4 +280,19 @@ end
 function checkCircularCollision(player, enemy)
 	local dx, dy, sr = enemy.x - player.x, enemy.y - player.y, 0 + player.r
 	return dx*dx + dy*dy < sr*sr
+end
+
+function updatePlayerAnimation(dt)
+    if player.animation.isPlaying then
+        player.animation.timer = player.animation.timer + dt
+        
+        if player.animation.timer >= player.animation.frameTime then
+            player.animation.timer = player.animation.timer - player.animation.frameTime
+            player.animation.currentFrame = player.animation.currentFrame + 1
+            
+            if player.animation.currentFrame > player.animation.totalFrames then
+                player.animation.currentFrame = 1
+            end
+        end
+    end
 end

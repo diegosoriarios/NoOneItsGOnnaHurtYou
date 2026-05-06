@@ -5,14 +5,16 @@ function generateUpgrades()
         description = "Increase movement speed",
         apply = function() 
           for _, k in pairs(player.attacks) do
-            k.speed = k.speed  + k.speed * .1
+            if (k.speed) then
+                k.speed = k.speed  + k.speed * .1
+            end
           end
          end
     },
     {
         name = "BPM Up",
         description = "Increase attack speed",
-        apply = function() player.bpm = player.bpm + 10 end
+        apply = function() music.tempoMultiplier = music.tempoMultiplier + 0.1 end
     },
     {
         name = "Range Up",
@@ -92,7 +94,8 @@ function getRandomUpgrades(count)
   for i = 1, count do
       if #indices == 0 then break end
       local randomIndex = love.math.random(#indices)
-      table.insert(choices, availableUpgrades[indices[randomIndex]])
+      --table.insert(choices, availableUpgrades[indices[randomIndex]])
+      table.insert(choices, availableUpgrades[2])
       table.remove(indices, randomIndex)
   end
   

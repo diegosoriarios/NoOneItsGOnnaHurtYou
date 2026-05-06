@@ -3,8 +3,10 @@ require("source.attacks")
 require("source.upgrades")
 
 local states = require 'source.states'
+local MIDI = require "plugins.midi_engine"
 
 local game = states.new('game')
+music = nil
 
 function game:init()
   --love.window.setFullscreen(true, "desktop")
@@ -22,6 +24,23 @@ function game:init()
 
   currentUpgradeChoices = {}
   selectedUpgrade = 1
+  
+  --AUDIO LOAD
+  local data = MIDI.Parser.parse("/songs/garota_do_cemiterio.mid")
+  music = MIDI.Player.new(data)
+  
+  -- Setup instruments
+  -- Load different sounds into the synth
+  music.synth.loadInstrument(1, "samples/piano.mp3")
+  --music.synth.loadInstrument(2, "strings.wav")
+  --music.synth.loadInstrument(3, "flute.wav")
+
+  music.synth.loadDrum(36, "samples/kick.mp3")
+  music.synth.loadDrum(38, "samples/snare.mp3")
+  music.synth.loadDrum(42, "samples/hihat.mp3")
+  music.synth.loadDrum(49, "samples/crash.mp3")
+  
+  music.play()
 
   player = {
     x = screen_width / 2 + math.cos(0) * 100,
@@ -88,6 +107,8 @@ end
 
 function game:update(dt)
   if showUpgradeMenu then return end
+
+  music.update(dt)
 
   if love.keyboard.isDown('right') then
     shipAngle = shipAngle + speed * dt

@@ -177,14 +177,16 @@ function game:draw()
         attack:draw(player)
     end
 
-  -- Temporary
-  love.graphics.setColor(1, 1, 1)
-  love.graphics.print('shipAngle: '..shipAngle)
-  love.graphics.print('spawnTimer: '..spawnTime, 0, 50)
-  love.graphics.print('fps: '..love.timer.getFPS(), 0, 100)
-
-  love.graphics.print('XP: '..player.xp..' / '..player.xpToNext, 0, 150)
-  love.graphics.print('Level: '..player.level, 0, 170)
+  -- Debug HUD (set DEBUG = true during development)
+  local DEBUG = false
+  if DEBUG then
+    love.graphics.setColor(1, 1, 1)
+    love.graphics.print('shipAngle: '..shipAngle)
+    love.graphics.print('spawnTimer: '..spawnTime, 0, 50)
+    love.graphics.print('fps: '..love.timer.getFPS(), 0, 100)
+    love.graphics.print('XP: '..player.xp..' / '..player.xpToNext, 0, 150)
+    love.graphics.print('Level: '..player.level, 0, 170)
+  end
 
   drawUpgradeMenu()
 end
@@ -238,13 +240,6 @@ function handleEnemyMove(dt)
     if checkCircularCollision(player, enemy) then
       player.xp = player.xp + 1
       table.remove(enemies, enemyIndex)
-
-      if distance <= attackRadius then
-        particles:setPosition(enemy.x, enemy.y)
-        particles:emit(10)
-        table.remove(enemies, i)
-      end
-
       checkLevelUp()
     end
 

@@ -6,7 +6,7 @@ require 'source.screens.characters'
 require 'source.screens.game'
 
 function love.load()
-    states.switch('game')
+    states.switch('mainmenu')
 end
 
 function love.update(dt)

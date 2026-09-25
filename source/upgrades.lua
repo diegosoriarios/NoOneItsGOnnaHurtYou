@@ -94,8 +94,7 @@ function getRandomUpgrades(count)
   for i = 1, count do
       if #indices == 0 then break end
       local randomIndex = love.math.random(#indices)
-      --table.insert(choices, availableUpgrades[indices[randomIndex]])
-      table.insert(choices, availableUpgrades[2])
+      table.insert(choices, availableUpgrades[indices[randomIndex]])
       table.remove(indices, randomIndex)
   end
   

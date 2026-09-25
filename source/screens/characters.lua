@@ -170,8 +170,8 @@ function character:keypressed(key)
         if key == "return" then
             local selectedCharacter = self.characters[self.selected]
             local selectedProtege = self.protege[self.selectedProtege]
-            print("Selected character: " .. selectedCharacter.name)
-            print("Selected protege: " .. selectedProtege.name)
+            states.global.selectedCharacter = selectedCharacter
+            states.global.selectedProtege = selectedProtege
             states.switch('game')
         end
     end

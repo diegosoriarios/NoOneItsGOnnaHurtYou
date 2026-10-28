@@ -33,18 +33,29 @@ love .
 
 from this repository's root directory (or zip the folder and open it with LÖVE).
 
+### Dev tools
+
+```bash
+love . --midi                  # standalone MIDI harness (audition songs/layers)
+luajit tests/test_engine.lua   # engine test suite, no LÖVE needed
+```
+
 ## Structure
 
 ```
-main.lua            entry point / LÖVE callbacks
+main.lua            entry point / LÖVE callbacks (--midi flag starts the harness)
+main_midi.lua       standalone MIDI audition harness
 source/states.lua   screen state machine
 source/screens/     mainmenu · characters · options · game · gameover
 source/upgrades.lua level-up upgrade pool
-source/attacks.lua  attack implementations
+source/roster.lua   instrument/attack roster + per-song palettes
+source/attacks.lua  beat-synced attack implementations
 source/audio.lua    audio helpers
 plugins/midi_engine.lua   MIDI parser + sample synth (the fun part)
+plugins/README.md   how the music system works and how it's wired in
 songs/              soundtrack (.mid)
 samples/            drum/instrument one-shots
+tests/              headless engine tests (run with luajit)
 ```
 
 ## Status

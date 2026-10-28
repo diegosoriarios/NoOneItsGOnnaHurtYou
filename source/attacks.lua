@@ -1,3 +1,61 @@
+-- Attacks fire on the music's beats. Each attack declares beatDiv (fire
+-- every N beats), beatOffset (shift within the pattern) and sound (the
+-- instrument one-shot the synth plays when the attack fires).
+local function attackPeriod(self)
+  if music and music.getBeatDuration then
+    return (self.beatDiv or 1) * music.getBeatDuration()
+  end
+  return 1
+end
+
+local function alignNextBeat(self, beat)
+  local div = self.beatDiv or 1
+  local offset = self.beatOffset or 0
+  local phase = (beat - offset) % div
+  if phase == 0 then return beat end
+  return beat + (div - phase)
+end
+
+-- Song gating: when true (default), gated attacks only fire on beat slots
+-- where the song actually plays their instrument. Set to false to fall back
+-- to a pure metronome grid.
+songGatingEnabled = true
+
+local function beatDue(self, dt)
+  if music and music.beatCount then
+    if self.nextBeat == nil then
+      self.nextBeat = alignNextBeat(self, music.beatCount)
+    end
+    if music.beatCount >= self.nextBeat then
+      local missed = music.beatCount - self.nextBeat > 1
+      self.nextBeat = alignNextBeat(self, music.beatCount + 1)
+      if missed then return false end
+      if songGatingEnabled and self.hitBeats and music.beatsPerLoop then
+        local loopBeat = (music.beatCount % music.beatsPerLoop) + 1
+        if not self.hitBeats[loopBeat] then
+          return false
+        end
+      end
+      self.timer = 0
+      return true
+    end
+    return false
+  end
+  self.fallbackTimer = (self.fallbackTimer or 1) - dt
+  if self.fallbackTimer <= 0 then
+    self.fallbackTimer = 1
+    return true
+  end
+  return false
+end
+
+local function playAttackSound(self)
+  if music and music.sfx and self.sound then
+    local s = self.sound
+    music.sfx(s.inst, s.note, s.vel or 110, s.dur or 0.4, s.drum)
+  end
+end
+
 function generateAttacks()
   local attacks = {
     [0] = {
@@ -7,16 +65,19 @@ function generateAttacks()
       timer = 0,
       count = 0,
       isActive = false,
+      beatDiv = 1,
+      sound = { inst = nil, note = 36, vel = 127, drum = true },
 
       update = function(self, dt, player, enemies)
         self.timer = self.timer + dt
 
-        if self.timer >= player.cooldown then
-          self.timer = self.timer - player.cooldown
+        if beatDue(self, dt) then
+          playAttackSound(self)
+          self.activeTimer = 0
           self.isActive = true
-          -- Play sound effect here if needed
         end
         if self.isActive then
+          self.activeTimer = self.activeTimer + dt
           for i = #enemies, 1, -1 do
             local enemy = enemies[i]
             local dx = enemy.x - player.x
@@ -31,7 +92,7 @@ function generateAttacks()
               checkLevelUp()
             end
           end
-          if self.timer >= self.duration then
+          if self.activeTimer >= self.duration then
             self.isActive = false
           end
         end
@@ -56,13 +117,7 @@ function generateAttacks()
         love.graphics.rectangle('fill', barX, barY, barWidth, barHeight)
 
         love.graphics.setColor(0, 1, 1)
-        local progress = (player.cooldown - self.timer) / player.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
-      end,
-
-      updateBPM = function(self, newBPM)
-        player.cooldown = 60 / newBPM
-        player.bpm = newBPM
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
       end
     },
     [1] = {
@@ -73,6 +128,8 @@ function generateAttacks()
       count = 2,
       cooldown = 60 / 60,
       timer = 0,
+      beatDiv = 2,
+      sound = { inst = 5, note = 36, vel = 115, dur = 0.4 },
 
       update = function(self, dt, player, enemies)
         for i = #self.bullets, 1, -1 do
@@ -98,8 +155,8 @@ function generateAttacks()
         end
 
         self.timer = self.timer + dt
-        if self.timer >= player.cooldown then
-          self.timer = self.timer - player.cooldown
+        if beatDue(self, dt) then
+          playAttackSound(self)
           for i = 1, self.count do
             local angle = (i - 1) * (2 * math.pi / self.count)
             table.insert(self.bullets, {
@@ -117,11 +174,6 @@ function generateAttacks()
         for _, bullet in ipairs(self.bullets) do
           love.graphics.circle('fill', bullet.x, bullet.y, self.radius)
         end
-      end,
-
-      updateBPM = function(self, newBPM)
-        player.cooldown = 60 / newBPM
-        player.bpm = newBPM
       end
     },
     [2] = {
@@ -132,14 +184,17 @@ function generateAttacks()
       timer = 0,
       circles = {},       -- Store active circles
       count = 3,          -- Number of circles to spawn each time
+      beatDiv = 2,
+      beatOffset = 1,
+      sound = { inst = nil, note = 49, vel = 127, drum = true },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new attack when cooldown is reached
-        if self.timer >= player.cooldown then
-          self.timer = self.timer - player.cooldown
+        -- Start new attack when the beat hits
+        if beatDue(self, dt) then
+          playAttackSound(self)
 
           -- Create multiple new circles at random positions
           for i = 1, self.count do
@@ -206,16 +261,11 @@ function generateAttacks()
         love.graphics.rectangle('fill', barX, barY, barWidth, barHeight)
         -- Progress
         love.graphics.setColor(1, 0.5, 0)
-        local progress = (player.cooldown - self.timer) / player.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
 
         -- Draw count indicator
         love.graphics.setColor(1, 1, 1)
         love.graphics.print("Circles: " .. self.count, barX + barWidth + 10, barY)
-      end,
-
-      updateBPM = function(self, newBPM)
-        player.cooldown = 60 / newBPM
       end
     },
     [3] = {
@@ -229,6 +279,8 @@ function generateAttacks()
       count = 2,                 -- Number of boomerangs to spawn
       damage = 1,                -- Damage multiplier
       spreadAngle = math.pi / 4, -- Angle between multiple boomerangs
+      beatDiv = 4,
+      sound = { inst = 6, note = 53, vel = 105, dur = 0.7 },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer only if no boomerangs are active
@@ -236,9 +288,9 @@ function generateAttacks()
           self.timer = self.timer + dt
         end
 
-        -- Start new attack when cooldown is reached and no boomerangs are active
-        if self.timer >= player.cooldown and #self.boomerangs < self.count then
-          self.timer = self.timer - player.cooldown
+        -- Start new attack when the beat hits and no boomerangs are active
+        if beatDue(self, dt) and #self.boomerangs < self.count then
+          playAttackSound(self)
 
           -- Calculate base angle from player's rotation
           local baseAngle = shipAngle
@@ -382,8 +434,7 @@ function generateAttacks()
         -- Progress
         if #self.boomerangs == 0 then
           love.graphics.setColor(1, 0.7, 0.2)
-          local progress = (player.cooldown - self.timer) / player.cooldown
-          love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+          love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
         else
           -- Show different color when boomerangs are active
           love.graphics.setColor(0.7, 0.5, 0.1)
@@ -393,11 +444,6 @@ function generateAttacks()
         -- Draw count indicator
         love.graphics.setColor(1, 1, 1)
         love.graphics.print("Boomerangs: " .. self.count, barX + barWidth + 10, barY)
-      end,
-
-      updateBPM = function(self, newBPM)
-        player.cooldown = 60 / newBPM
-        player.bpm = newBPM
       end
     },
     [4] = {
@@ -410,14 +456,17 @@ function generateAttacks()
       damage = 1,     -- Damage multiplier
       offset = 100,   -- Distance from player
       count = 0,
+      beatDiv = 4,
+      beatOffset = 2,
+      sound = { inst = 2, note = 60, vel = 110, dur = 0.5 },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new attack when cooldown is reached
-        if self.timer >= player.cooldown then
-          self.timer = self.timer - player.cooldown
+        -- Start new attack when the beat hits
+        if beatDue(self, dt) then
+          playAttackSound(self)
 
           -- Create left and right fire towers
           table.insert(self.towers, {
@@ -542,13 +591,7 @@ function generateAttacks()
 
         -- Progress
         love.graphics.setColor(1, 0.3, 0.1)
-        local progress = (player.cooldown - self.timer) / player.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
-      end,
-
-      updateBPM = function(self, newBPM)
-        player.cooldown = 60 / newBPM
-        player.bpm = newBPM
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
       end,
 
       drawHeatDistortion = function(self, x, y, width, height)
@@ -578,6 +621,9 @@ function generateAttacks()
       maxBounces = 3,     -- Default number of bounces before destroying
       damage = 1,         -- Damage multiplier
       penetration = 1,    -- Number of enemies it can hit before destroying
+      beatDiv = 2,
+      beatOffset = 1,
+      sound = { inst = 3, note = 40, vel = 115, dur = 0.3 },
       knifeTypes = {
         normal = {
           color = { 0.8, 0.8, 0.8 },
@@ -597,9 +643,9 @@ function generateAttacks()
         -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new attack when cooldown is reached
-        if self.timer >= self.cooldown then
-          self.timer = self.timer - self.cooldown
+        -- Start new attack when the beat hits
+        if beatDue(self, dt) then
+          playAttackSound(self)
 
           -- Create new knife
           table.insert(self.knives, {
@@ -778,8 +824,7 @@ function generateAttacks()
 
         -- Progress
         love.graphics.setColor(0.8, 0.8, 0.8)
-        local progress = (self.cooldown - self.timer) / self.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
 
         -- Draw stats
         love.graphics.setColor(1, 1, 1)
@@ -822,11 +867,7 @@ function generateAttacks()
         end
 
         return sparks
-      end,
-      updateBPM = function(self, newBPM)
-        player.cooldown = 60 / newBPM
-        player.bpm = newBPM
-      end,
+      end
     },
     [6] = {
       name = "Laser Beam Attack",
@@ -841,6 +882,8 @@ function generateAttacks()
       angle = 0,         -- Current angle of the laser
       rotationSpeed = 5, -- Rotation speed in radians per second
       autoRotate = true, -- Whether the laser auto-rotates or follows mouse/player direction
+      beatDiv = 4,
+      sound = { inst = 4, note = 72, vel = 110, dur = 0.5 },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer
@@ -853,15 +896,12 @@ function generateAttacks()
           self.angle = shipAngle -- Or use mouse angle
         end
 
-        -- Start new laser burst when cooldown is reached
-        if self.timer >= self.cooldown then
+        -- Start new laser burst when the beat hits
+        if beatDue(self, dt) then
+          playAttackSound(self)
           self:addScreenShake(50)
-          self.timer = self.timer - self.cooldown
           self.active = true
           self.activeTimer = 0
-
-          -- Play laser sound
-          -- if laserSound then laserSound:play() end
         end
 
         -- Update active laser
@@ -963,8 +1003,7 @@ function generateAttacks()
 
         -- Progress
         love.graphics.setColor(1, 0, 0)
-        local progress = (self.cooldown - self.timer) / self.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
 
         -- Draw laser stats
         love.graphics.setColor(1, 1, 1)
@@ -972,9 +1011,6 @@ function generateAttacks()
           barX + barWidth + 10, barY)
       end,
 
-      updateBPM = function(self, newBPM)
-        self.cooldown = 60 / newBPM
-      end,
       createLaserImpactEffect = function(self, x, y)
         local effect = {
           x = x,
@@ -1016,14 +1052,17 @@ function generateAttacks()
       closingSpeed = 300,     -- Speed at which the walls close
       startAngle = 0,         -- Start as straight line (0 degrees)
       endAngle = math.pi / 2, -- End angle for V shape (60 degrees)
+      beatDiv = 4,
+      beatOffset = 2,
+      sound = { inst = 1, note = 48, vel = 105, dur = 0.6 },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new wall attack when cooldown is reached
-        if self.timer >= self.cooldown then
-          self.timer = self.timer - self.cooldown
+        -- Start new wall attack when the beat hits
+        if beatDue(self, dt) then
+          playAttackSound(self)
 
           -- Create new straight line that will morph into V shape
           local centerX = player.x
@@ -1193,17 +1232,12 @@ function generateAttacks()
 
         -- Progress
         love.graphics.setColor(1, 0.5, 1)
-        local progress = (self.cooldown - self.timer) / self.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
 
         -- Draw wall stats
         love.graphics.setColor(1, 1, 1)
         love.graphics.print(string.format("Wall Length: %.0f", self.wallLength),
           barX + barWidth + 10, barY)
-      end,
-
-      updateBPM = function(self, newBPM)
-        self.cooldown = 60 / newBPM
       end
     },
     [8] = {
@@ -1218,14 +1252,17 @@ function generateAttacks()
       markDuration = 3, -- How long poison marks last
       markRadius = 20,  -- Size of poison marks
       cloudSpeed = 150, -- Speed of cloud movement
+      beatDiv = 4,
+      beatOffset = 3,
+      sound = { inst = 7, note = 76, vel = 100, dur = 0.8 },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new poison cloud when cooldown is reached
-        if self.timer >= self.cooldown then
-          self.timer = self.timer - self.cooldown
+        -- Start new poison cloud when the beat hits
+        if beatDue(self, dt) then
+          playAttackSound(self)
 
           -- Create new poison cloud at player position with random direction
           local angle = love.math.random() * math.pi * 2
@@ -1414,8 +1451,7 @@ function generateAttacks()
 
         -- Progress
         love.graphics.setColor(0.2, 0.8, 0.2)
-        local progress = (self.cooldown - self.timer) / self.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
 
         -- Draw stats
         love.graphics.setColor(1, 1, 1)
@@ -1423,10 +1459,6 @@ function generateAttacks()
           barX + barWidth + 10, barY)
         love.graphics.print(string.format("Active Marks: %d", #self.poisonMarks),
           barX + barWidth + 10, barY + 15)
-      end,
-
-      updateBPM = function(self, newBPM)
-        self.cooldown = 60 / newBPM
       end
     },
     [9] = {
@@ -1442,14 +1474,16 @@ function generateAttacks()
       splatterCount = 3,     -- How many blood drops split from main arc
       count = 2,             -- Number of arcs to throw at once (new property)
       spreadAngle = math.pi / 6, -- Angle between multiple arcs
+      beatDiv = 2,
+      sound = { inst = nil, note = 56, vel = 120, drum = true },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new arc when cooldown is reached
-        if self.timer >= self.cooldown then
-          self.timer = self.timer - self.cooldown
+        -- Start new arc when the beat hits
+        if beatDue(self, dt) then
+          playAttackSound(self)
 
           -- Calculate initial velocity based on desired height
           local initialVelocityY = -math.sqrt(2 * self.gravity * self.arcHeight)
@@ -1673,12 +1707,7 @@ function generateAttacks()
 
         -- Progress
         love.graphics.setColor(0.8, 0, 0)
-        local progress = (self.cooldown - self.timer) / self.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
-      end,
-
-      updateBPM = function(self, newBPM)
-        self.cooldown = 60 / newBPM
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
       end
     },
     [10] = {
@@ -1698,20 +1727,19 @@ function generateAttacks()
       angle = 0,
       speed = 0,
       rotationSpeed = 5,
+      beatDiv = 2,
+      sound = { inst = nil, note = 41, vel = 120, drum = true },
 
       update = function(self, dt, player, enemies)
         -- Update attack timer
         self.timer = self.timer + dt
 
-        -- Start new flame burst when cooldown is reached
-        if self.timer >= self.cooldown and not self.isActive then
-          self.timer = self.timer - self.cooldown
+        -- Start new flame burst when the beat hits
+        if beatDue(self, dt) and not self.isActive then
+          playAttackSound(self)
           self.isActive = true
           self.durationTimer = self.duration
           self.hitEnemies = {}   -- Reset hit enemies for new activation
-
-          -- Play flame sound
-          -- if flameSound then flameSound:play() end
         end
 
         -- Update duration timer if active
@@ -1858,8 +1886,7 @@ function generateAttacks()
 
         -- Progress
         love.graphics.setColor(1, 0.5, 0)
-        local progress = (self.cooldown - self.timer) / self.cooldown
-        love.graphics.rectangle('fill', barX, barY, barWidth * (1 - progress), barHeight)
+        love.graphics.rectangle('fill', barX, barY, barWidth * math.min(1, self.timer / attackPeriod(self)), barHeight)
 
         -- Draw stats
         love.graphics.setColor(1, 1, 1)
@@ -1867,10 +1894,6 @@ function generateAttacks()
           barX + barWidth + 10, barY)
         love.graphics.print(string.format("Duration: %.1fs", self.duration),
           barX + barWidth + 10, barY + 15)
-      end,
-
-      updateBPM = function(self, newBPM)
-        self.cooldown = 60 / newBPM
       end
     }
   }

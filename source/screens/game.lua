@@ -1,12 +1,68 @@
 require("source.audio")
 require("source.attacks")
 require("source.upgrades")
+local roster = require("source.roster")
 
 local states = require 'source.states'
 local MIDI = require "plugins.midi_engine"
 
 local game = states.new('game')
 music = nil
+currentSongPath = "songs/garota_do_cemiterio.mid"
+
+-- Unlock progression helpers. Roster entry k pairs with song layer k-1
+-- (entry 1 = drums pairs with the drum track itself). Every unlock brings
+-- exactly one instrument: its attack, its song layer (if the song has one)
+-- and, for the drums entry, the drum track.
+function nextLockedRosterEntry()
+  for i = 1, #roster.ENTRIES do
+    if not music.unlockedRoster[i] then
+      return i, roster.ENTRIES[i]
+    end
+  end
+end
+
+function unlockRosterEntry(entryIndex)
+  local entry = roster.ENTRIES[entryIndex]
+  if not entry or music.unlockedRoster[entryIndex] then return nil end
+  music.unlockedRoster[entryIndex] = true
+
+  local attackInstance = attacks[entry.attack]
+  if attackInstance then
+    attackInstance.nextBeat = nil
+    local s = roster.resolveAttackSound(entry.attack, currentSongPath, music.synth)
+    if s then attackInstance.sound = s end
+    applyPlayerStatsToAttack(attackInstance)
+    table.insert(player.attacks, attackInstance)
+  end
+
+  -- the drums entry also brings the drum track itself
+  if entryIndex == 1 and music.drumTrackIndex and music.drumsMuted then
+    music.setTrackMuted(music.drumTrackIndex, false)
+    music.drumsMuted = false
+  end
+
+  local layer = unlockLayerByIndex(entryIndex - 1)
+  return entry, layer
+end
+
+function unlockLayerByIndex(layerIndex)
+  local layer = music.trackLayers[layerIndex]
+  if not layer or layer.unlocked then return nil end
+  layer.unlocked = true
+  music.setTrackMuted(layer.track, false)
+  if layer.instrument then
+    music.setTrackInstrument(layer.track, layer.instrument)
+  end
+  music.sfx(1, 72, 120, 0.6)
+  return layer
+end
+
+function unlockNextRosterEntry()
+  local entryIndex, entry = nextLockedRosterEntry()
+  if not entry then return nil end
+  return unlockRosterEntry(entryIndex)
+end
 
 function game:init()
   --love.window.setFullscreen(true, "desktop")
@@ -24,24 +80,77 @@ function game:init()
 
   currentUpgradeChoices = {}
   selectedUpgrade = 1
-  
+
   --AUDIO LOAD
-  local data = MIDI.Parser.parse("/songs/garota_do_cemiterio.mid")
+  local data = MIDI.Parser.parse(currentSongPath)
+  assert(data, "midi_engine: could not parse '" .. currentSongPath .. "'")
   music = MIDI.Player.new(data)
-  
-  -- Setup instruments
-  -- Load different sounds into the synth
-  music.synth.loadInstrument(1, "samples/piano.mp3")
-  --music.synth.loadInstrument(2, "strings.wav")
-  --music.synth.loadInstrument(3, "flute.wav")
 
-  music.synth.loadDrum(36, "samples/kick.mp3")
-  music.synth.loadDrum(38, "samples/snare.mp3")
-  music.synth.loadDrum(42, "samples/hihat.mp3")
-  music.synth.loadDrum(49, "samples/crash.mp3")
-  
-  music.play()
+  -- Load every registered instrument/drum sample (missing files skip quietly)
+  roster.loadInstruments(music.synth)
 
+  -- Song convention: the drum track backs the Drummer; every other character
+  -- starts solo and the drums join at the first Add Instrument. Melodic
+  -- tracks are layers that start muted; layer k pairs with roster entry k+1.
+  -- The layer's instrument comes from its track name (set it in your DAW) or
+  -- from its roster pairing.
+  music.trackLayers = {}
+  local drumTrackIndex = nil
+  for trackIndex, track in ipairs(data.tracks) do
+    local hasNotes, hasDrums = false, false
+    for _, e in ipairs(track) do
+      if e.type == "noteon" then
+        hasNotes = true
+        if e.channel == 9 then hasDrums = true end
+      end
+    end
+    if hasDrums and not drumTrackIndex then
+      drumTrackIndex = trackIndex
+    end
+    if hasNotes and not hasDrums then
+      local layerIndex = #music.trackLayers + 1
+      local instrument = roster.instrumentIdForTrackName(data.trackNames[trackIndex])
+      if not instrument then
+        instrument = roster.entryMelodicId(layerIndex + 1)
+      end
+      table.insert(music.trackLayers, {
+        track = trackIndex,
+        name = data.trackNames[trackIndex] or ("Layer " .. layerIndex),
+        instrument = instrument,
+        unlocked = false,
+      })
+      music.setTrackMuted(trackIndex, true)
+    end
+  end
+  music.delayLevel = 0
+  music.unlockedRoster = {}
+  music.drumTrackIndex = drumTrackIndex
+
+  -- Song gating: map each roster entry to the beat slots where the song
+  -- actually plays its instrument. Gated attacks skip slots without hits.
+  local beatTimes = music.getBeatTimes()
+  local window = math.max(0.04, ((beatTimes[2] or beatTimes[1]) - (beatTimes[1] or 0)) / 8)
+  for entryIndex, entry in ipairs(roster.ENTRIES) do
+    local attackInstance = attacks[entry.attack]
+    if attackInstance then
+      local noteTimes
+      local layer = music.trackLayers[entryIndex - 1]
+      if layer then
+        noteTimes = roster.collectNoteTimes(data.tracks[layer.track])
+      elseif entry.sound and entry.sound.drum and drumTrackIndex then
+        -- entry 1 (the drum kit) gates on the whole groove; other kit
+        -- entries gate on their specific piece
+        local noteFilter
+        if entryIndex ~= 1 then
+          noteFilter = entry.sound.note
+        end
+        noteTimes = roster.collectNoteTimes(data.tracks[drumTrackIndex], noteFilter)
+      end
+      attackInstance.hitBeats = roster.buildHitBeats(beatTimes, noteTimes, window)
+    end
+  end
+
+  -- The selected character's starter instrument joins drums from beat one.
   player = {
     x = screen_width / 2 + math.cos(0) * 100,
     y = screen_height / 2 + math.sin(0) * 100,
@@ -52,11 +161,30 @@ function game:init()
     xpToNext = 5,
     bpm = 60,
     hp = 1,
+    speedMul = 1,
+    areaMul = 1,
+    damageMul = 1,
+    quantityBonus = 0,
   }
-  player.cooldown = 60 / player.bpm
-  player.attacks = {
-    attacks[0]
-  }
+  player.attacks = {}
+
+  -- Character starter: unlock that roster entry. The Drummer (starter 1)
+  -- plays the drum track; every other character starts solo -- the drums are
+  -- their own "Add Instrument" unlock later. Each starter brings its own
+  -- paired song layer (entry k pairs with layer k-1) when the song has it.
+  local starter = 1
+  local character = states.global.selectedCharacter
+  if character then
+    if character.starter then starter = character.starter end
+    if character.speed then speed = character.speed end
+  end
+  unlockRosterEntry(starter)
+  music.drumsMuted = (starter ~= 1) and (music.drumTrackIndex ~= nil)
+  if music.drumsMuted then
+    music.setTrackMuted(music.drumTrackIndex, true)
+  end
+
+  music.play()
   player.spriteSheet = love.graphics.newImage("graphics/sprites/Character.png")
   player.animation = {
       frameWidth = 460,     -- Width of each frame
@@ -106,9 +234,9 @@ function game:init()
 end
 
 function game:update(dt)
-  if showUpgradeMenu then return end
-
   music.update(dt)
+
+  if showUpgradeMenu then return end
 
   if love.keyboard.isDown('right') then
     shipAngle = shipAngle + speed * dt
@@ -273,7 +401,9 @@ function drawUpgradeMenu()
       love.graphics.setColor(1, 1, 1)
       love.graphics.print(upgrade.name, x, y)
       love.graphics.setColor(0.7, 0.7, 0.7)
-      love.graphics.print(upgrade.description, x, y + 20, 0, 0.8, 0.8)
+      local description = upgrade.description
+      if type(description) == "function" then description = description() end
+      love.graphics.print(description, x, y + 20, 0, 0.8, 0.8)
   end
   
   love.graphics.setColor(0.7, 0.7, 0.7)

@@ -1,467 +1,265 @@
--- main.lua - LÖVE2D MIDI Player (Fixed for LuaJIT/Lua 5.1)
+-- main_midi.lua
+-- Standalone MIDI harness: audition songs, layers and instrument mappings
+-- without playing the game. Run from the repo root:
+--   love . --midi
+--
+-- Keys:
+--   space        play / pause
+--   left/right   seek -/+ 5 seconds
+--   u / i        tempo multiplier -/+ 10%
+--   1..9         mute / unmute track N
+--   l            toggle looping
+--   d            cycle delay level (0-3, beat-synced echo)
+--   g            toggle game layers (drums-only start, like the real game)
+--   [ / ]        previous / next song in songs/
+--   r            restart song
+--   esc          quit
+local MIDI = require("plugins.midi_engine")
+local roster = require("source.roster")
 
-local MIDIPlayer = {}
+local player
+local songs = {}
+local songIndex = 1
+local gameLayers = false
+local trackInfo = {}
+local gateCoverage = {}
+local delayLevel = 0
 
--- Helper function to read big-endian integers
-local function readBytes(data, pos, count)
-    local value = 0
-    for i = 0, count - 1 do
-        value = value * 256 + data:byte(pos + i)
+local function loadSongList()
+  songs = {}
+  if love.filesystem.getInfo("song.mid") then
+    songs[#songs + 1] = "song.mid"
+  end
+  local items = love.filesystem.getDirectoryItems("songs")
+  table.sort(items)
+  for _, item in ipairs(items) do
+    if item:sub(-4):lower() == ".mid" then
+      songs[#songs + 1] = "songs/" .. item
     end
-    return value, pos + count
+  end
 end
 
--- Simple MIDI file parser
-local MIDIParser = {}
-
-function MIDIParser.readVarLen(data, pos)
-    local value = 0
-    local byte
-    repeat
-        byte = data:byte(pos)
-        pos = pos + 1
-        value = (value * 128) + (byte % 128)
-    until byte < 128
-    return value, pos
-end
-
-function MIDIParser.parse(filename)
-    local file = love.filesystem.read(filename)
-    if not file then return nil end
-    
-    local pos = 1
-    local tracks = {}
-    
-    -- Read header chunk
-    local header = file:sub(pos, pos + 3)
-    if header ~= "MThd" then return nil end
-    pos = pos + 4
-    
-    -- Header length (should be 6)
-    local headerLen
-    headerLen, pos = readBytes(file, pos, 4)
-    
-    -- Format, number of tracks, division
-    local format, numTracks, division
-    format, pos = readBytes(file, pos, 2)
-    numTracks, pos = readBytes(file, pos, 2)
-    division, pos = readBytes(file, pos, 2)
-    
-    -- Read tracks
-    for i = 1, numTracks do
-        local trackHeader = file:sub(pos, pos + 3)
-        if trackHeader ~= "MTrk" then break end
-        pos = pos + 4
-        
-        local trackLen
-        trackLen, pos = readBytes(file, pos, 4)
-        
-        local track = {}
-        local trackEnd = pos + trackLen
-        local time = 0
-        local runningStatus = 0
-        
-        while pos < trackEnd do
-            -- Read delta time
-            local delta
-            delta, pos = MIDIParser.readVarLen(file, pos)
-            time = time + delta
-            
-            -- Read event
-            local status = file:byte(pos)
-            
-            if status < 0x80 then
-                -- Running status
-                status = runningStatus
-            else
-                pos = pos + 1
-                runningStatus = status
-            end
-            
-            local eventType = math.floor(status / 16)
-            local channel = status % 16
-            
-            if eventType == 0x9 then -- Note On
-                local note = file:byte(pos)
-                local velocity = file:byte(pos + 1)
-                pos = pos + 2
-                
-                if velocity > 0 then
-                    table.insert(track, {type = "noteon", time = time, note = note, velocity = velocity, channel = channel})
-                else
-                    table.insert(track, {type = "noteoff", time = time, note = note, channel = channel})
-                end
-            elseif eventType == 0x8 then -- Note Off
-                local note = file:byte(pos)
-                pos = pos + 2
-                table.insert(track, {type = "noteoff", time = time, note = note, channel = channel})
-            elseif eventType == 0xB then -- Control Change
-                pos = pos + 2
-            elseif eventType == 0xC then -- Program Change
-                pos = pos + 1
-            elseif eventType == 0xE then -- Pitch Bend
-                pos = pos + 2
-            elseif eventType == 0xA then -- Aftertouch
-                pos = pos + 2
-            elseif eventType == 0xD then -- Channel Pressure
-                pos = pos + 1
-            elseif eventType == 0xF then -- System/Meta events
-                if status == 0xFF then
-                    local metaType = file:byte(pos)
-                    pos = pos + 1
-                    local length
-                    length, pos = MIDIParser.readVarLen(file, pos)
-                    
-                    if metaType == 0x51 and length == 3 then -- Set Tempo
-                        local tempo
-                        tempo, pos = readBytes(file, pos, 3)
-                        table.insert(track, {type = "tempo", time = time, tempo = tempo})
-                    else
-                        pos = pos + length
-                    end
-                elseif status == 0xF0 or status == 0xF7 then
-                    local length
-                    length, pos = MIDIParser.readVarLen(file, pos)
-                    pos = pos + length
-                end
-            else
-                -- Unknown event, skip 2 bytes
-                if pos + 1 < trackEnd then
-                    pos = pos + 2
-                else
-                    break
-                end
-            end
-        end
-        
-        table.insert(tracks, track)
-        pos = trackEnd
-    end
-    
-    return {tracks = tracks, division = division, format = format}
-end
-
--- Simple synthesizer
-local Synth = {}
-
-function Synth.new()
-    local self = {
-        activeNotes = {},
-        sampleRate = 44100,
-        instruments = {}, -- Store SoundData for each instrument
-        drumKit = {} -- New table for drum samples
-    }
-
-    function self.loadInstrument(id, filename)
-        local info = love.filesystem.getInfo(filename)
-        if info then
-            self.instruments[id] = love.sound.newSoundData(filename)
-        end
-    end
-
-    function self.loadDrum(midiNote, filename)
-        if love.filesystem.getInfo(filename) then
-            self.drumKit[midiNote] = love.sound.newSoundData(filename)
-        end
-    end
-    
-    function self.noteOn(note, velocity, instrumentId, isDrum)
-    if isDrum then
-        local sample = self.drumKit[note]
-        if sample then
-            -- Drums don't pitch shift, they just play at pitch 1.0
-            -- We use a unique key (note .. "drum" .. os.clock()) so multiple drums can overlap
-            local drumKey = note .. "drum" .. os.clock()
-            self.activeNotes[drumKey] = {
-                inst = sample,
-                pitch = 1.0, 
-                velocity = velocity / 127,
-                pointer = 0,
-                loop = false -- Drums usually don't loop
-            }
-        end
+local function applyGameLayers()
+  if not player then return end
+  for ti, info in ipairs(trackInfo) do
+    if gameLayers then
+      player.setTrackMuted(ti, info.notes > 0 and not info.hasDrums)
     else
-        local inst = self.instruments[instrumentId] or self.instruments[1] -- Fallback to 1
-        if not inst then return end
-
-        local pitch = math.pow(2, (note - 60) / 12)
-        
-        self.activeNotes[note] = {
-            inst = inst,
-            pitch = pitch,
-            velocity = velocity / 127,
-            pointer = 0,
-            loop = true
-        }
+      player.setTrackMuted(ti, false)
     end
-end
-    
-    function self.noteOff(note)
-        if self.activeNotes[note] then
-        self.activeNotes[note] = nil
-    end
-    end
-    
-    function self.generateSamples(count)
-    local samples = {}
-    for i = 1, count do
-        local out = 0
-        local toRemove = {}
-        
-        for noteKey, data in pairs(self.activeNotes) do
-            local inst = data.inst
-            local sampleCount = inst:getSampleCount()
-            
-            -- Get the sample value at the current pointer
-            local idx = math.floor(data.pointer)
-            if idx < sampleCount then
-                local s = inst:getSample(idx)
-                out = out + s * data.velocity * 0.5
-                
-                -- Move pointer based on pitch
-                data.pointer = data.pointer + data.pitch
-                
-                -- Loop the sample if it hits the end
-                if data.pointer >= sampleCount then
-                    if data.loop then
-                        data.pointer = 0 
-                    else
-                        -- Mark for removal (drums)
-                        table.insert(toRemove, noteKey)
-                    end
-                end
-            else
-                table.insert(toRemove, noteKey)
-            end
-        end
-        
-        -- Remove finished one-shot samples
-        for _, key in ipairs(toRemove) do
-            self.activeNotes[key] = nil
-        end
-        
-        table.insert(samples, out)
-    end
-    return samples
-end
-    
-    return self
+  end
 end
 
--- MIDI Player
-function MIDIPlayer.new(midiData)
-    local self = {
-        midiData = midiData,
-        synth = Synth.new(),
-        currentTime = 0,
-        tempo = 500000, -- Default tempo (120 BPM)
-        tempoMultiplier = 1.0, -- Add this line (1.0 is normal speed)
-        playing = false,
-        eventQueue = {},
-        mutedTracks = {}, -- New table to store muted status (true = muted)
-        queueSource = nil,
-        eventIndex = 1 -- Initialize here to prevent nil errors in draw
+local function cycleDelay()
+  delayLevel = (delayLevel + 1) % 4
+  player.setDelay(0.22 * delayLevel, 0.3 + 0.08 * delayLevel, 0.75)
+end
+
+local function startSong(path)
+  if player and player.queueSource then
+    player.queueSource:stop()
+  end
+
+  local data = MIDI.Parser.parse(path)
+  if not data then
+    print("[harness] could not parse " .. tostring(path))
+    return
+  end
+
+  player = MIDI.Player.new(data)
+  roster.loadInstruments(player.synth)
+  delayLevel = 0
+
+  trackInfo = {}
+  gateCoverage = {}
+  local drumTrackIndex = nil
+  for ti, track in ipairs(data.tracks) do
+    local notes, hasDrums = 0, false
+    local channels = {}
+    for _, e in ipairs(track) do
+      if e.type == "noteon" then
+        notes = notes + 1
+        channels[e.channel] = true
+        if e.channel == 9 then hasDrums = true end
+      end
+    end
+    if hasDrums and not drumTrackIndex then
+      drumTrackIndex = ti
+    end
+    local channelList = {}
+    for c in pairs(channels) do channelList[#channelList + 1] = c end
+    table.sort(channelList)
+    trackInfo[ti] = {
+      notes = notes,
+      hasDrums = hasDrums,
+      channels = table.concat(channelList, ","),
+      name = (data.trackNames and data.trackNames[ti]) or ("Track " .. ti),
     }
-    
-    -- Merge all tracks into one event queue
-    for trackIndex, track in ipairs(midiData.tracks) do
-        self.mutedTracks[trackIndex] = false -- All tracks unmuted by default
-        for _, event in ipairs(track) do
-            event.trackIndex = trackIndex -- Tag the event with its track ID
-            table.insert(self.eventQueue, event)
-        end
-    end
-    
-    -- Sort by time
-    table.sort(self.eventQueue, function(a, b) return a.time < b.time end)
-    
-    function self.play()
-        if self.eventIndex > #self.eventQueue then
-            self.eventIndex = 1
-            self.currentTime = 0
-        end
-        self.playing = true
-    end
-    
-    function self.pause()
-        self.playing = false
-    end
-    
-    function self.update(dt)
-        if not self.playing then return end
-        
-        -- Convert delta time to MIDI ticks
-        local ticksPerSecond = (1000000 / self.tempo) * self.midiData.division * self.tempoMultiplier
-        self.currentTime = self.currentTime + dt * ticksPerSecond
-        
-        -- Process events
-        while self.eventIndex <= #self.eventQueue do
-            local event = self.eventQueue[self.eventIndex]
-            
-            if event.time > self.currentTime then
-                break
-            end
-            
-            local isMuted = self.mutedTracks[event.trackIndex]
-            
-            if event.type == "noteon" then
-            if not isMuted then
-                -- MIDI Channel 10 (index 9) is always drums
-                local isDrum = (event.channel == 9)
-                self.synth.noteOn(event.note, event.velocity, event.trackIndex, isDrum)
-            end
-            elseif event.type == "noteoff" then
-                -- Always allow noteoff so notes don't get stuck
-                self.synth.noteOff(event.note)
-            elseif event.type == "tempo" then
-                self.tempo = event.tempo
-            end
-            
-            self.eventIndex = self.eventIndex + 1
-        end
-        
-        -- Generate audio (1024 samples is about 23ms at 44.1kHz)
-        -- We queue multiple buffers if needed to prevent gaps
-        if not self.queueSource then
-            -- 44100Hz, 16-bit, Mono, 8 buffers
-            self.queueSource = love.audio.newQueueableSource(44100, 16, 1, 8)
-            self.queueSource:setVolume(1.0) -- Ensure volume is max
-            self.queueSource:play()
-        end
+  end
 
-        while self.queueSource:getFreeBufferCount() > 0 do
-            local samples = self.synth.generateSamples(1024)
-            local soundData = love.sound.newSoundData(#samples, 44100, 16, 1)
-            for i = 1, #samples do
-                -- Clamp samples to [-1, 1] to avoid distortion
-                local s = math.max(-1, math.min(1, samples[i]))
-                soundData:setSample(i - 1, s)
-            end
-            self.queueSource:queue(soundData)
-        end
-        
-        -- Stop if finished
-        if self.eventIndex > #self.eventQueue and #self.synth.activeNotes == 0 then
-            self.playing = false
-        end
-
-        if not self.queueSource:isPlaying() and self.playing then
-            self.queueSource:play()
-        end
+  -- gate coverage per roster entry (beats with a hit / total beats)
+  local beatTimes = player.getBeatTimes()
+  local window = math.max(0.04, ((beatTimes[2] or beatTimes[1]) - (beatTimes[1] or 0)) / 8)
+  for entryIndex, entry in ipairs(roster.ENTRIES) do
+    local noteTimes
+    local layerIndex = entryIndex - 1
+    local layerTrack = nil
+    local melodicSeen = 0
+    for ti, track in ipairs(data.tracks) do
+      local hasDrums = trackInfo[ti].hasDrums
+      local hasNotes = trackInfo[ti].notes > 0
+      if hasNotes and not hasDrums then
+        melodicSeen = melodicSeen + 1
+        if melodicSeen == layerIndex then layerTrack = ti end
+      end
     end
-    
-    return self
+    if layerTrack then
+      noteTimes = roster.collectNoteTimes(data.tracks[layerTrack])
+    elseif entry.sound and entry.sound.drum and drumTrackIndex then
+      noteTimes = roster.collectNoteTimes(data.tracks[drumTrackIndex], entry.sound.note)
+    end
+    local hits = roster.buildHitBeats(beatTimes, noteTimes, window)
+    if hits then
+      local n = 0
+      for _ in pairs(hits) do n = n + 1 end
+      gateCoverage[entryIndex] = ("%d/%d beats"):format(n, #beatTimes)
+    else
+      gateCoverage[entryIndex] = "ungated"
+    end
+  end
+
+  if gameLayers then applyGameLayers() end
+  player.play()
 end
-
--- LÖVE2D callbacks
-local player = nil
-local midiFile = nil
 
 function love.load()
-    love.window.setTitle("LÖVE2D MIDI Player")
-    love.window.setMode(800, 600)
-    
-    -- Try to load a MIDI file (you'll need to provide one)
-    -- Place a MIDI file named "song.mid" in your project folder
-    midiFile = MIDIParser.parse("song.mid")
-    
-    if midiFile then
-        player = MIDIPlayer.new(midiFile)
-    
-    -- Load different sounds into the synth
-        player.synth.loadInstrument(1, "samples/piano.mp3")
-        --player.synth.loadInstrument(2, "strings.wav")
-        --player.synth.loadInstrument(3, "flute.wav")
+  love.window.setTitle("MIDI Harness")
+  love.window.setMode(860, 640)
 
-        player.synth.loadDrum(36, "samples/kick.mp3")
-        player.synth.loadDrum(38, "samples/snare.mp3")
-        player.synth.loadDrum(42, "samples/hihat.mp3")
-        player.synth.loadDrum(49, "samples/crash.mp3")
-
-        print("MIDI file loaded successfully!")
-        print("Tracks: " .. #midiFile.tracks)
-        print("Press SPACE to play/pause")
-    else
-        print("No MIDI file found. Place 'song.mid' in your project folder.")
-    end
+  loadSongList()
+  if #songs == 0 then
+    songs[1] = nil
+    print("[harness] no .mid files found (put one in songs/)")
+    return
+  end
+  startSong(songs[songIndex])
 end
 
 function love.update(dt)
-    if player then
-        player.update(dt)
-    end
+  if player then
+    player.update(dt)
+  end
 end
 
 function love.draw()
-    love.graphics.setColor(1, 1, 1)
-    love.graphics.print("LÖVE2D MIDI Player", 20, 20)
-    
-    if player then
-        -- Track Status UI
-        love.graphics.print("Tracks (Press 1-9 to Mute):", 400, 20)
-        for i = 1, math.min(9, #player.midiData.tracks) do
-            local status = player.mutedTracks[i] and "MUTED" or "ON"
-            local color = player.mutedTracks[i] and {1, 0, 0} or {0, 1, 0}
-            love.graphics.setColor(color)
-            love.graphics.print("Track " .. i .. ": " .. status, 400, 20 + (i * 20))
-        end
-        
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.print("Press SPACE to play/pause", 20, 50)
-        love.graphics.print("Speed: " .. math.floor(player.tempoMultiplier * 100) .. "% (U: Up, I: Down)", 20, 170)
-        love.graphics.print("Status: " .. (player.playing and "Playing" or "Paused"), 20, 80)
-        love.graphics.print("Time (Ticks): " .. string.format("%d", player.currentTime), 20, 110)
-        love.graphics.print("Events: " .. player.eventIndex .. " / " .. #player.eventQueue, 20, 140)
-        
-        -- Visualizer: Draw active notes
-        love.graphics.print("Active Notes:", 20, 180)
-        local y = 200
-        for noteKey, _ in pairs(player.synth.activeNotes) do
-            -- Extract the numeric part of the key for the visualizer
-            local noteNum = tonumber(noteKey) or tonumber(string.match(noteKey, "^(%d+)"))
-            
-            if noteNum then
-                -- Draw a rectangle based on the MIDI note number
-                love.graphics.rectangle("fill", 20, y, noteNum * 5, 10)
-                y = y + 12
-            end
-            
-            -- Limit drawing so it doesn't go off screen
-            if y > 580 then break end
-        end
+  love.graphics.setColor(1, 1, 1)
+  if not player then
+    love.graphics.print("No song loaded. Drop a .mid into songs/ and restart.", 20, 20)
+    return
+  end
+
+  local songName = songs[songIndex] or "?"
+  love.graphics.print(("MIDI Harness  -  %s  (%d/%d)"):format(songName, songIndex, #songs), 20, 20)
+  love.graphics.print(("%.1fx tempo   %s   loop %s   delay %d/3   latency +%dms"):format(
+    player.tempoMultiplier,
+    player.playing and "PLAYING" or "PAUSED",
+    player.loop and "on" or "off",
+    delayLevel, math.floor(player.latencyOffset * 1000 + 0.5)), 20, 45)
+  love.graphics.print(("%.1fs / %.1fs   beat %d   voices %d   game-layers %s"):format(
+    player.songPos, player.loopLength, player.beatCount,
+    player.synth.voiceCount, gameLayers and "on" or "off"), 20, 70)
+
+  -- beat phase bar
+  local phase = player.getBeatPhase()
+  love.graphics.setColor(0.2, 0.2, 0.2)
+  love.graphics.rectangle('fill', 20, 100, 400, 8)
+  love.graphics.setColor(0, 1, 0.4)
+  love.graphics.rectangle('fill', 20, 100, 400 * phase, 8)
+
+  -- song position bar
+  love.graphics.setColor(0.2, 0.2, 0.2)
+  love.graphics.rectangle('fill', 20, 115, 400, 8)
+  love.graphics.setColor(0.3, 0.6, 1)
+  love.graphics.rectangle('fill', 20, 115, 400 * (player.songPos / math.max(0.001, player.loopLength)), 8)
+
+  -- tracks
+  love.graphics.setColor(1, 1, 1)
+  love.graphics.print("Tracks (1-9 mute; ch column shows MIDI channels):", 20, 140)
+  local y = 165
+  for ti, info in ipairs(trackInfo) do
+    if ti > 9 then break end
+    local muted = player.mutedTracks[ti]
+    local label = ("[%d] %-18s ch:%-6s notes:%-5d %s"):format(
+      ti, info.name:sub(1, 18), info.channels, info.notes,
+      info.hasDrums and "(drums)" or "")
+    if muted then
+      love.graphics.setColor(1, 0.3, 0.3)
     else
-        love.graphics.print("No MIDI file loaded", 20, 50)
-        love.graphics.print("Place 'song.mid' in your project folder", 20, 80)
+      love.graphics.setColor(0.5, 1, 0.5)
     end
+    love.graphics.print(label .. (muted and "  MUTED" or "  on"), 20, y)
+    y = y + 20
+  end
+
+  -- roster gate coverage
+  love.graphics.setColor(1, 1, 1)
+  love.graphics.print("Attack gating (fires only on these song beats):", 20, y + 10)
+  y = y + 30
+  for entryIndex, entry in ipairs(roster.ENTRIES) do
+    if entryIndex > 6 then break end
+    love.graphics.setColor(0.7, 0.7, 0.7)
+    love.graphics.print(("%-14s %s"):format(entry.instrument, gateCoverage[entryIndex] or "-"), 20, y)
+    y = y + 18
+  end
+
+  love.graphics.setColor(0.7, 0.7, 0.7)
+  love.graphics.print("space play   left/right seek 5s   u/i tempo   -/= latency   l loop", 20, love.graphics.getHeight() - 95)
+  love.graphics.print("d delay   g game-layers   [ ] song   r restart   1-9 mute   esc quit", 20, love.graphics.getHeight() - 75)
 end
 
 function love.keypressed(key)
-local trackNum = tonumber(key)
-    if trackNum and trackNum >= 1 and trackNum <= 9 and player then
-        if player.midiData.tracks[trackNum] then
-            player.mutedTracks[trackNum] = not player.mutedTracks[trackNum]
-            
-            -- If we just muted it, kill all active notes to be safe
-            if player.mutedTracks[trackNum] then
-                -- Optional: you could loop through active notes and clear them
-                -- but the noteoff logic above usually handles this.
-            end
-        end
+  if not player then
+    if key == "escape" then love.event.quit() end
+    return
+  end
+
+  local trackNum = tonumber(key)
+  if trackNum and trackNum >= 1 and trackNum <= 9 and player.midiData.tracks[trackNum] then
+    player.toggleTrack(trackNum)
+  elseif key == "space" then
+    if player.playing then player.pause() else player.play() end
+  elseif key == "right" then
+    player.seek(player.songPos + 5)
+  elseif key == "left" then
+    player.seek(player.songPos - 5)
+  elseif key == "u" then
+    player.tempoMultiplier = math.min(3, player.tempoMultiplier + 0.1)
+  elseif key == "i" then
+    player.tempoMultiplier = math.max(0.5, player.tempoMultiplier - 0.1)
+  elseif key == "=" then
+    player.latencyOffset = player.latencyOffset + 0.01
+  elseif key == "-" then
+    player.latencyOffset = math.max(0, player.latencyOffset - 0.01)
+  elseif key == "l" then
+    player.loop = not player.loop
+  elseif key == "d" then
+    cycleDelay()
+  elseif key == "g" then
+    gameLayers = not gameLayers
+    applyGameLayers()
+  elseif key == "r" then
+    player.stop()
+    player.play()
+  elseif key == "[" or key == "]" then
+    if #songs > 0 then
+      if key == "]" then
+        songIndex = songIndex % #songs + 1
+      else
+        songIndex = (songIndex - 2) % #songs + 1
+      end
+      startSong(songs[songIndex])
     end
-  if key == "space" and player then
-        if player.playing then player.pause() else player.play() end
-    
-    elseif key == "u" and player then
-        -- Increase speed by 10%
-        player.tempoMultiplier = player.tempoMultiplier + 0.1
-        print("Speed: " .. math.floor(player.tempoMultiplier * 100) .. "%")
-        
-    elseif key == "i" and player then
-        -- Decrease speed by 10% (clamp at 0.1 to prevent stopping/reversing)
-        player.tempoMultiplier = math.max(0.1, player.tempoMultiplier - 0.1)
-        print("Speed: " .. math.floor(player.tempoMultiplier * 100) .. "%")
-        
-    elseif key == "escape" then
-        love.event.quit()
-    end
+  elseif key == "escape" then
+    love.event.quit()
+  end
 end

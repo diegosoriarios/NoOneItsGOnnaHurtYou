@@ -1,3 +1,11 @@
+-- `love . --midi` starts the standalone MIDI harness instead of the game
+for _, a in ipairs(arg or {}) do
+  if a == "--midi" then
+    require("main_midi")
+    return
+  end
+end
+
 local states = require 'source.states'
 
 require 'source.screens.main_menu'

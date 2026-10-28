@@ -3,13 +3,15 @@ local states = require 'source.states'
 local character = states.new('character')
 
 function character:init()
+    -- starter = index into source/roster.lua ENTRIES (1 = Drums, 2 = Synth,
+    -- 3 = Rhythm Guitar, 4 = Crash, 5 = Lead Guitar, 6 = Piano)
     self.characters = {
-        {name = "Character 1", speed = 5},
-        {name = "Character 2", speed = 6},
-        {name = "Character 3", speed = 4},
-        {name = "Character 1", speed = 5},
-        {name = "Character 2", speed = 6},
-        {name = "Character 3", speed = 4},
+        { name = "The Drummer",  starter = 1, speed = 5 },
+        { name = "The Synthist", starter = 2, speed = 5 },
+        { name = "Riffmaster",   starter = 3, speed = 6 },
+        { name = "Crashmaker",   starter = 4, speed = 4 },
+        { name = "The Soloist",  starter = 5, speed = 5 },
+        { name = "The Pianist",  starter = 6, speed = 4 },
     }
     self.selected = 1
     self.state = "character"
@@ -19,8 +21,8 @@ function character:init()
         { name = "Name", image = "image"},
         { name = "Name2", image = "image2"},
     }
-    
-    local gridRows = 1
+
+    local gridRows = 2
     local gridCols = 3
     
     local cellSize = math.min(
@@ -74,11 +76,12 @@ function character:drawCharacterGrid()
             love.graphics.rectangle('fill', x, y, grid.cellSize, grid.cellSize)
 
             love.graphics.setColor(1, 1, 1)
-            love.graphics.print(
-                cellIndex,
-                x + grid.cellSize/2 - 10,
-                y + grid.cellSize/2 - 10
-            )
+            local characterData = self.characters[cellIndex]
+            if characterData then
+                love.graphics.print(characterData.name, x + 10, y + grid.cellSize / 2 - 20)
+                love.graphics.setColor(0.7, 0.7, 0.7)
+                love.graphics.print("starter: " .. tostring(characterData.starter), x + 10, y + grid.cellSize / 2 + 5)
+            end
         end
     end
 end
